@@ -1,4 +1,4 @@
 .pio
 .vscode/
 
-config.h
+secrets.h
