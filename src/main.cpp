@@ -14,10 +14,12 @@
 // Pins
 const uint8_t DSPLY_SDA = D3;
 const uint8_t DSPLY_SCL = D4;
-const uint8_t VIBR_1 = D2;
+const uint8_t VIBR_1    = D2;
 const uint8_t EN_SWITCH = D7;
+const uint8_t ACK_BTN   = D8;
 
 // Program states
+const uint16_t WAIT_STATE_CHK = 500;
 const uint8_t STATE_NORMAL = 0;
 const uint8_t STATE_SLEEP = 1;
 const uint8_t STATE_ALARM = 2;
@@ -26,7 +28,7 @@ const uint8_t STATE_ALARM = 2;
 const uint8_t NTP_UDP = 123;
 const char* NTP_SERVER = "time.nist.gov";
 const uint8_t NTP_PACKET_SIZE = 48;
-const uint16_t NTP_REQ_WAIT = 60000; // ms
+const uint16_t WAIT_NTP_REQ = 60000;
 
 const int DSPLY_I2C_ADDR = 0x3c;
 
@@ -126,7 +128,6 @@ uint32_t getUnixTime(){
 // send NTP packet to time server asking for current time
 void sendPacketNTP(IPAddress &addr){
     Serial.println("Sending NTP packet...");
-
     memset(NTPBuffer, 0, NTP_PACKET_SIZE);
 
     // 48 bytes for request, only need to populate first one.
@@ -142,6 +143,7 @@ void setup(){
     pgmState = STATE_NORMAL;
     pinMode(VIBR_1, OUTPUT);
     pinMode(EN_SWITCH, INPUT);
+    pinMode(ACK_BTN, INPUT);
 
     initSerial();
     initDisplay();
@@ -156,10 +158,11 @@ void setup(){
     }
     Serial.printf("Time server IP:  %s\n", timeServerIP.toString().c_str());
     sendPacketNTP(timeServerIP);
+    delay(500);
 }
 
 
-/*** loop work variables ***/
+/*** updateTime work variables ***/
 unsigned long prevNTP = 0;
 unsigned long lastNTPResponse = millis();
 uint32_t unixTime = 0;
@@ -167,16 +170,13 @@ unsigned long prevActualTime = 0;
 
 TimeChangeRule* tcr;
 char displayBuffer[16];
-
-uint8_t vibeState = 0;
 /***************************/
-
 
 // request time from NTP and trigger alarm if its time to go to bed
 void updateTime(unsigned long currentMillis){
 
     // wait a bit before requesting time again
-    if(currentMillis - prevNTP > NTP_REQ_WAIT && pgmState == STATE_NORMAL){
+    if(currentMillis - prevNTP > WAIT_NTP_REQ && pgmState == STATE_NORMAL){
         prevNTP = currentMillis;
         sendPacketNTP(timeServerIP);
     }
@@ -184,8 +184,9 @@ void updateTime(unsigned long currentMillis){
     uint32_t tempTime = getUnixTime();
 
     if(tempTime){
-        Serial.printf("NTP response:  %d\n", unixTime);
         unixTime = myTZ.toLocal(tempTime, &tcr); // convert unix time to local timezone
+        Serial.printf("NTP response:  %d\n", unixTime);
+        lastNTPResponse = currentMillis;
     } else if((currentMillis - lastNTPResponse) > 3600000){
         // something has gone wrong, need to reset
         Serial.println("More than an hour since last NTP request. Rebooting...");
@@ -209,20 +210,65 @@ void updateTime(unsigned long currentMillis){
     }
 }
 
-void checkAwake(){
-    if(digitalRead(EN_SWITCH)){
-        pgmState = STATE_NORMAL;
-    } else{
-        pgmState = STATE_SLEEP;
-    }
-}
+
+/*** Loop work variables ***/
+unsigned long previousMillis = 0;
+uint8_t vibrate = 0;
+uint8_t prevState = 0;
+/***************************/
+
+// TODO: test
+int alarmCounter = 0;
 
 void loop(){
-    if(pgmState == STATE_NORMAL){
-        updateTime(millis());
-    } else if(pgmState == STATE_ALARM){
-        vibeState = !vibeState;
-        digitalWrite(VIBR_1, vibeState);
-        delay(1000);
+    unsigned long currentMillis = millis();
+
+    // apply state changes if enough time has passed
+    if(currentMillis - previousMillis >= WAIT_STATE_CHK){
+        prevState = pgmState;
+        previousMillis = currentMillis;
+
+        Serial.printf("State: %d\n", pgmState);
+
+        // update states if needed
+        if(!digitalRead(EN_SWITCH)){
+            pgmState = STATE_SLEEP;
+        } else if(digitalRead(ACK_BTN) && pgmState == STATE_ALARM){
+            pgmState = STATE_NORMAL;
+            alarmCounter = 0;
+            vibrate = 0;
+            digitalWrite(VIBR_1, vibrate);
+            display.setFont(ArialMT_Plain_24);
+            display.clear();
+        } else if(prevState == STATE_SLEEP){
+            pgmState = STATE_NORMAL;
+        }
+        // TODO: else if check if time for alarm
+
+        if(pgmState == STATE_NORMAL){
+            display.displayOn();
+            updateTime(currentMillis);
+        } else if(pgmState == STATE_ALARM){
+            vibrate = !vibrate;
+            digitalWrite(VIBR_1, vibrate);
+        } else if(pgmState == STATE_SLEEP){
+            display.displayOff();
+            vibrate = 0;
+            digitalWrite(VIBR_1, vibrate);
+        }
+
+        // TODO: test
+        if(pgmState != STATE_SLEEP){
+            alarmCounter++;
+            if(alarmCounter >= 10){
+                pgmState = STATE_ALARM;
+
+                display.setFont(ArialMT_Plain_16);
+                display.clear();
+                display.drawString(64, 14, "GO TO BED!");
+                display.display();
+            }
+        }
+
     }
 }
