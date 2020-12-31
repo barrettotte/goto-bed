@@ -16,19 +16,21 @@ const uint8_t DSPLY_SDA = D3;
 const uint8_t DSPLY_SCL = D4;
 const uint8_t VIBR_1    = D2;
 const uint8_t EN_SWITCH = D7;
-const uint8_t ACK_BTN   = D8;
+const uint8_t FUNC_BTN   = D8;
+const uint8_t ALARM_POT = A0;
 
 // Program states
 const uint16_t WAIT_STATE_CHK = 500;
 const uint8_t STATE_NORMAL = 0;
 const uint8_t STATE_SLEEP = 1;
 const uint8_t STATE_ALARM = 2;
+const uint8_t STATE_EDIT = 3;
 
 // NTP and display configuration
 const uint8_t NTP_UDP = 123;
 const char* NTP_SERVER = "time.nist.gov";
 const uint8_t NTP_PACKET_SIZE = 48;
-const uint16_t WAIT_NTP_REQ = 60000;
+const uint32_t WAIT_NTP_REQ = 300000; // every 5 mins NTP sync
 
 const int DSPLY_I2C_ADDR = 0x3c;
 
@@ -37,7 +39,6 @@ TimeChangeRule myDST = {"EDT", Second, Sun, Mar, 2, -240}; // EDT = UTC-4h
 TimeChangeRule mySTD = {"EST", First, Sun, Nov, 2, -300};  // EST = UTC-5h
 Timezone myTZ(myDST, mySTD);
 
-
 // Globals
 SSD1306Wire display(DSPLY_I2C_ADDR, DSPLY_SDA, DSPLY_SCL);
 WiFiUDP UDP;
@@ -45,6 +46,27 @@ IPAddress timeServerIP;
 
 uint8_t pgmState;
 byte NTPBuffer[NTP_PACKET_SIZE];
+
+// alarm pot
+uint8_t alarmIncPerHour = 4;
+uint16_t alarmPotVal = 0;
+uint16_t alarmPotStep = (uint16_t) round(1000 / (23 * alarmIncPerHour));
+uint8_t alarmHour = 0;
+uint8_t alarmMin = 0;
+
+// time
+unsigned long previousMillis = 0;
+uint8_t vibrate = 0;
+uint8_t prevState = 0;
+
+
+unsigned long prevNTP = 0;
+unsigned long lastNTPResponse = millis();
+uint32_t unixTime = 0;
+unsigned long prevActualTime = 0;
+
+TimeChangeRule* tcr;
+char displayBuffer[16];
 
 
 // initialize serial
@@ -139,11 +161,34 @@ void sendPacketNTP(IPAddress &addr){
     UDP.endPacket();
 }
 
+// round number n to nearest multiple i
+int roundToNearest(int n, int i){
+    int a = (n / i) * i;
+    int b = a + i;
+    return (n - a > b - n) ? b : a;
+}
+
+// read analog potentiometer value
+void readAlarmPot(){
+    alarmPotVal = roundToNearest(analogRead(ALARM_POT) - alarmPotStep, alarmPotStep) / alarmPotStep;
+    alarmHour = alarmPotVal / alarmIncPerHour;
+    alarmMin = (alarmPotVal % alarmIncPerHour) * (60 / alarmIncPerHour);
+    
+    // clamp time 00:00 to 23:30
+    if(alarmHour < 0){
+        alarmHour = 0;
+        alarmMin = 0;
+    } else if(alarmHour > 23){
+        alarmHour = 23;
+        alarmMin = 60 - (60 / alarmIncPerHour);
+    }
+}
+
 void setup(){
     pgmState = STATE_NORMAL;
     pinMode(VIBR_1, OUTPUT);
     pinMode(EN_SWITCH, INPUT);
-    pinMode(ACK_BTN, INPUT);
+    pinMode(FUNC_BTN, INPUT);
 
     initSerial();
     initDisplay();
@@ -158,19 +203,26 @@ void setup(){
     }
     Serial.printf("Time server IP:  %s\n", timeServerIP.toString().c_str());
     sendPacketNTP(timeServerIP);
+    
+    display.clear();
+    readAlarmPot(); // set alarm initial value
     delay(500);
 }
 
+// display alarm to screen
+void drawAlarm(){
+    sprintf(displayBuffer, "%02d:%02d", alarmHour, alarmMin);
 
-/*** updateTime work variables ***/
-unsigned long prevNTP = 0;
-unsigned long lastNTPResponse = millis();
-uint32_t unixTime = 0;
-unsigned long prevActualTime = 0;
-
-TimeChangeRule* tcr;
-char displayBuffer[16];
-/***************************/
+    if(pgmState == STATE_EDIT){
+        display.clear();
+        display.setFont(ArialMT_Plain_24);
+        display.drawString(64, 20, displayBuffer);
+        display.display();
+    } else {
+        display.setFont(ArialMT_Plain_10);
+        display.drawString(16, 4, displayBuffer);
+    } 
+}
 
 // request time from NTP and trigger alarm if its time to go to bed
 void updateTime(unsigned long currentMillis){
@@ -197,28 +249,39 @@ void updateTime(unsigned long currentMillis){
     uint32_t actualTime = unixTime + (currentMillis - lastNTPResponse) / 1000;
 
     if(actualTime != prevActualTime && unixTime != 0){
+        uint8_t actualHour = actualTime / 3600 % 24;
+        uint8_t actualMin = actualTime / 60 % 60;
+        uint8_t actualSec = actualTime % 60;
+
+        if(pgmState == STATE_NORMAL && actualHour == alarmHour && actualMin == alarmMin && actualSec == 0){
+            pgmState = STATE_ALARM;
+        }
         prevActualTime = actualTime;
-
-        sprintf(displayBuffer, "%02d:%02d:%02d",
-            actualTime/3600%24, actualTime/60%60, actualTime%60);
-
-        Serial.printf("UTC time: %s\n", displayBuffer);
+        sprintf(displayBuffer, "%02d:%02d:%02d", actualHour, actualMin, actualSec);
 
         display.clear();
-        display.drawString(64, 14, displayBuffer);
+        display.setFont(ArialMT_Plain_16);
+        display.drawString(64, 20, displayBuffer);
+        drawAlarm();
         display.display();
     }
 }
 
-
-/*** Loop work variables ***/
-unsigned long previousMillis = 0;
-uint8_t vibrate = 0;
-uint8_t prevState = 0;
-/***************************/
-
 // TODO: test
 int alarmCounter = 0;
+
+// handle program state when function button pressed
+void funcBtnPressed(){
+    if(pgmState == STATE_ALARM){
+        pgmState = STATE_NORMAL;
+        vibrate = 0;
+        digitalWrite(VIBR_1, vibrate);
+    } else if(pgmState == STATE_NORMAL){
+        pgmState = STATE_EDIT;
+    } else if(pgmState == STATE_EDIT){
+        pgmState = STATE_NORMAL;
+    }
+}
 
 void loop(){
     unsigned long currentMillis = millis();
@@ -228,47 +291,33 @@ void loop(){
         prevState = pgmState;
         previousMillis = currentMillis;
 
-        Serial.printf("State: %d\n", pgmState);
-
         // update states if needed
         if(!digitalRead(EN_SWITCH)){
             pgmState = STATE_SLEEP;
-        } else if(digitalRead(ACK_BTN) && pgmState == STATE_ALARM){
-            pgmState = STATE_NORMAL;
-            alarmCounter = 0;
-            vibrate = 0;
-            digitalWrite(VIBR_1, vibrate);
-            display.setFont(ArialMT_Plain_24);
-            display.clear();
         } else if(prevState == STATE_SLEEP){
             pgmState = STATE_NORMAL;
+        } else if(digitalRead(FUNC_BTN)){
+            funcBtnPressed();
         }
-        // TODO: else if check if time for alarm
 
+        // perform action(s) based on current state
         if(pgmState == STATE_NORMAL){
             display.displayOn();
             updateTime(currentMillis);
         } else if(pgmState == STATE_ALARM){
-            vibrate = !vibrate;
+            vibrate = !vibrate; // toggle vibration every other tick
             digitalWrite(VIBR_1, vibrate);
+            display.setFont(ArialMT_Plain_16);
+            display.clear();
+            display.drawString(64, 14, "GO TO BED!");
+            display.display();
         } else if(pgmState == STATE_SLEEP){
             display.displayOff();
             vibrate = 0;
             digitalWrite(VIBR_1, vibrate);
+        } else if(pgmState == STATE_EDIT){
+            readAlarmPot();
+            drawAlarm();
         }
-
-        // TODO: test
-        if(pgmState != STATE_SLEEP){
-            alarmCounter++;
-            if(alarmCounter >= 10){
-                pgmState = STATE_ALARM;
-
-                display.setFont(ArialMT_Plain_16);
-                display.clear();
-                display.drawString(64, 14, "GO TO BED!");
-                display.display();
-            }
-        }
-
     }
 }
