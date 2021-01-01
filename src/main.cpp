@@ -23,7 +23,7 @@ const uint8_t STATE_SLEEP  = 1;
 const uint8_t STATE_ALARM  = 2;
 const uint8_t STATE_EDIT   = 3;
 
-// Structs
+// Type definitions
 typedef struct alarm_t{
     uint8_t incPerHour;
     uint16_t val;
@@ -31,16 +31,6 @@ typedef struct alarm_t{
     uint8_t hour;
     uint8_t min;
 } Alarm_t;
-
-typedef struct pgm_t{
-    uint8_t state;
-    uint8_t vibrate;
-    uint32_t unixTime;
-    ulong previousMillis;
-    ulong prevNtp;
-    ulong lastNtpResp;
-    ulong prevActualTime;
-} Pgm_t; // global variables with "enforced scope"
 
 // Misc Config
 const char* NTP_SERVER = "time.nist.gov";
@@ -52,11 +42,18 @@ const uint8_t DSPLY_I2C_ADDR = 0x3c;
 
 // Globals
 Alarm_t *alarm;
-Pgm_t *pgm;
 SimpleNTP simpleNtp(NTP_SERVER);
 SSD1306Wire display(DSPLY_I2C_ADDR, DSPLY_SDA, DSPLY_SCL);
 TimeChangeRule* tcr;
 Timezone myTZ(myDST, mySTD);
+
+uint8_t pgmState = STATE_NORMAL;
+uint8_t vibrate = 0;
+uint32_t unixTime = 0;
+ulong previousMillis = 0;
+ulong prevNtp = 0;
+ulong lastNtpResp = millis();
+ulong prevActualTime = 0;
 
 
 // initialize serial
@@ -131,10 +128,6 @@ void readAlarmPot(){
 }
 
 void setup(){
-    pgm = (Pgm_t *) malloc(sizeof(Pgm_t));
-    pgm->state = STATE_NORMAL;
-    pgm->lastNtpResp = millis();
-
     pinMode(VIBR_1, OUTPUT);
     pinMode(EN_SWITCH, INPUT);
     pinMode(FUNC_BTN, INPUT);
@@ -161,7 +154,7 @@ void drawAlarm(){
     char buffer[16];
     sprintf(buffer, "%02d:%02d", alarm->hour, alarm->min);
 
-    if(pgm->state == STATE_EDIT){
+    if(pgmState == STATE_EDIT){
         display.clear();
         display.setFont(ArialMT_Plain_24);
         display.drawString(64, 20, buffer);
@@ -174,35 +167,35 @@ void drawAlarm(){
 
 // request time from NTP and trigger alarm if its time to go to bed
 void processTime(ulong currentMillis){
-    if(currentMillis - pgm->prevNtp > WAIT_NTP_REQ && pgm->state == STATE_NORMAL){
-        pgm->prevNtp = currentMillis;
+    if(currentMillis - prevNtp > WAIT_NTP_REQ && pgmState == STATE_NORMAL){
+        prevNtp = currentMillis;
         simpleNtp.sendPacketNTP();
     }
     uint32_t tempTime = simpleNtp.getUnixTime();
 
     if(tempTime){
-        pgm->unixTime = myTZ.toLocal(tempTime, &tcr); // convert unix time to local timezone
-        Serial.printf("NTP response:  %d\n", pgm->unixTime);
-        pgm->lastNtpResp = currentMillis;
-    } else if((currentMillis - pgm->lastNtpResp) > 3600000){
+        unixTime = myTZ.toLocal(tempTime, &tcr); // convert unix time to local timezone
+        Serial.printf("NTP response:  %d\n", unixTime);
+        lastNtpResp = currentMillis;
+    } else if((currentMillis - lastNtpResp) > 3600000){
         Serial.println("More than an hour since last NTP request. Rebooting...");
         Serial.flush();
         ESP.reset();
     }
-    uint32_t actualTime = pgm->unixTime + (currentMillis - pgm->lastNtpResp) / 1000;
+    uint32_t actualTime = unixTime + (currentMillis - lastNtpResp) / 1000;
 
-    if(actualTime != pgm->prevActualTime && pgm->unixTime != 0){
+    if(actualTime != prevActualTime && unixTime != 0){
         char buffer[16];
         uint8_t actualHour = actualTime / 3600 % 24;
         uint8_t actualMin = actualTime / 60 % 60;
         uint8_t actualSec = actualTime % 60;
 
         // trigger alarm if its time
-        if(pgm->state == STATE_NORMAL && actualHour == alarm->hour 
+        if(pgmState == STATE_NORMAL && actualHour == alarm->hour 
           && actualMin == alarm->min && actualSec == 0){
-            pgm->state = STATE_ALARM;
+            pgmState = STATE_ALARM;
         }
-        pgm->prevActualTime = actualTime;
+        prevActualTime = actualTime;
         sprintf(buffer, "%02d:%02d:%02d", actualHour, actualMin, actualSec);
 
         display.clear();
@@ -215,21 +208,21 @@ void processTime(ulong currentMillis){
 
 // handle program state change when function button pressed
 void funcBtnPressed(){
-    if(pgm->state == STATE_ALARM){
-        pgm->state = STATE_NORMAL;
-        pgm->vibrate = 0;
-        digitalWrite(VIBR_1, pgm->vibrate);
-    } else if(pgm->state == STATE_NORMAL){
-        pgm->state = STATE_EDIT;
-    } else if(pgm->state == STATE_EDIT){
-        pgm->state = STATE_NORMAL;
+    if(pgmState == STATE_ALARM){
+        pgmState = STATE_NORMAL;
+        vibrate = 0;
+        digitalWrite(VIBR_1, vibrate);
+    } else if(pgmState == STATE_NORMAL){
+        pgmState = STATE_EDIT;
+    } else if(pgmState == STATE_EDIT){
+        pgmState = STATE_NORMAL;
     }
 }
 
 // trigger vibration motors and display message
 void handleAlarm(){
-    pgm->vibrate = !pgm->vibrate; // toggle vibration every other tick
-    digitalWrite(VIBR_1, pgm->vibrate);
+    vibrate = !vibrate; // toggle vibration every other tick
+    digitalWrite(VIBR_1, vibrate);
 
     display.setFont(ArialMT_Plain_16);
     display.clear();
@@ -239,16 +232,16 @@ void handleAlarm(){
 
 // perform action(s) based on current state
 void performAction(ulong currentMillis){
-    if(pgm->state == STATE_NORMAL){
+    if(pgmState == STATE_NORMAL){
         display.displayOn();
         processTime(currentMillis);
-    } else if(pgm->state == STATE_ALARM){
+    } else if(pgmState == STATE_ALARM){
         handleAlarm();
-    } else if(pgm->state == STATE_SLEEP){
-        pgm->vibrate = 0;
+    } else if(pgmState == STATE_SLEEP){
+        vibrate = 0;
         display.displayOff();
-        digitalWrite(VIBR_1, pgm->vibrate);
-    } else if(pgm->state == STATE_EDIT){
+        digitalWrite(VIBR_1, vibrate);
+    } else if(pgmState == STATE_EDIT){
         readAlarmPot();
         drawAlarm();
     }
@@ -257,14 +250,14 @@ void performAction(ulong currentMillis){
 void loop(){
     ulong currentMillis = millis();
 
-    if(currentMillis - pgm->previousMillis >= WAIT_STATE_CHK){
-        pgm->previousMillis = currentMillis;
+    if(currentMillis - previousMillis >= WAIT_STATE_CHK){
+        previousMillis = currentMillis;
 
         // transition to different state if needed
         if(!digitalRead(EN_SWITCH)){
-            pgm->state = STATE_SLEEP;
-        } else if(pgm->state == STATE_SLEEP){
-            pgm->state = STATE_NORMAL;
+            pgmState = STATE_SLEEP;
+        } else if(pgmState == STATE_SLEEP){
+            pgmState = STATE_NORMAL;
         } else if(digitalRead(FUNC_BTN)){
             funcBtnPressed();
         }
