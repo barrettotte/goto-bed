@@ -19,9 +19,8 @@ const uint8_t ALARM_POT = A0;
 
 // Program states
 const uint8_t STATE_NORMAL = 0;
-const uint8_t STATE_SLEEP  = 1;
-const uint8_t STATE_ALARM  = 2;
-const uint8_t STATE_EDIT   = 3;
+const uint8_t STATE_ALARM  = 1;
+const uint8_t STATE_EDIT   = 2;
 
 // Type definitions
 typedef struct alarm_t{
@@ -74,7 +73,7 @@ void initDisplay(){
     display.init();
     display.clear();
     display.display();
-    display.flipScreenVertically();
+    // display.flipScreenVertically();
     display.setTextAlignment(TEXT_ALIGN_CENTER);
     display.setContrast(255);
     display.setFont(ArialMT_Plain_10);
@@ -199,8 +198,8 @@ void processTime(ulong currentMillis){
         sprintf(buffer, "%02d:%02d:%02d", actualHour, actualMin, actualSec);
 
         display.clear();
-        display.setFont(ArialMT_Plain_16);
-        display.drawString(64, 20, buffer);
+        display.setFont(ArialMT_Plain_24);
+        display.drawString(64, 24, buffer);
         drawAlarm();
         display.display();
     }
@@ -237,10 +236,6 @@ void performAction(ulong currentMillis){
         processTime(currentMillis);
     } else if(pgmState == STATE_ALARM){
         handleAlarm();
-    } else if(pgmState == STATE_SLEEP){
-        vibrate = 0;
-        display.displayOff();
-        digitalWrite(VIBR_1, vibrate);
     } else if(pgmState == STATE_EDIT){
         readAlarmPot();
         drawAlarm();
@@ -254,11 +249,7 @@ void loop(){
         previousMillis = currentMillis;
 
         // transition to different state if needed
-        if(!digitalRead(EN_SWITCH)){
-            pgmState = STATE_SLEEP;
-        } else if(pgmState == STATE_SLEEP){
-            pgmState = STATE_NORMAL;
-        } else if(digitalRead(FUNC_BTN)){
+        if(digitalRead(FUNC_BTN)){
             funcBtnPressed();
         }
         performAction(currentMillis);
