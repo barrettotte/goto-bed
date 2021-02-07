@@ -1,7 +1,7 @@
 # goto-bed
 Making my melatonin bottle vibrate so I know its time to go to bed.
 
-I just wanted a little project to work on between other proejects, this
+I just wanted a little project to work on between other projects, this
 seemed perfect.
 
 
@@ -18,8 +18,35 @@ seemed perfect.
 - Press function button again to reset back to normal state
 
 
-## Schematic
-![docs/schematic_small.png](docs/schematic_small.png)
+## Images
+
+<figure align="center">
+  <img src="docs/schematic_small.png"/>
+  <figcaption>
+    Basic schematic
+  </figcaption>
+</figure>
+<br>
+<figure align="center">
+  <img src="docs/breadboard.jpg"/>
+  <figcaption>
+    Breadboard prototype
+  </figcaption>
+</figure>
+<br>
+<figure align="center">
+  <img src="docs/soldered-top.jpg"/>
+  <figcaption>
+    Badly soldered circuit (top)
+  </figcaption>
+</figure>
+<br>
+<figure align="center">
+  <img src="docs/soldered-bottom.jpg"/>
+  <figcaption>
+    Badly soldered circuit (bottom)
+  </figcaption>
+</figure>
 
 
 ## Learned
