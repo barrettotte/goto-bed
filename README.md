@@ -4,6 +4,10 @@ Making my melatonin bottle vibrate so I know its time to go to bed.
 I just wanted a little project to work on between other projects, this
 seemed perfect.
 
+<figure align="center">
+  <img src="docs/done.jpg"/>
+</figure>
+
 
 ## General Concept
 - Send NTP request to get current time and resync every 5 minutes
