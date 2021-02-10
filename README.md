@@ -1,8 +1,7 @@
 # goto-bed
 Making my melatonin bottle vibrate so I know its time to go to bed.
 
-I just wanted a little project to work on between other projects, this
-seemed perfect.
+I just wanted a little project to work on to learn Fusion 360 and a bit of KiCad.
 
 <figure align="center">
   <img src="docs/done.jpg"/>
